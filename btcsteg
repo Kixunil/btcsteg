@@ -1,0 +1,117 @@
+#!/bin/bash
+
+# Copyright (c) 2013 Martin Habovštiak
+
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+# 
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+# 
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+# THE SOFTWARE.
+
+VANITYGEN="$HOME/sources/vanitygen/vanitygen"
+BITCOIN_BASH_TOOLS="$HOME/sources/bitcoin-bash-tools/bitcoin.sh"
+
+encrypt() {
+	. "$BITCOIN_BASH_TOOLS"
+	MSG=$(mktemp /dev/shm/btcstegmsg.XXXXXXXX) # creates temporary file in RAM disk
+	echo "Enter your message (end with Ctrl+D)"
+	cat > $MSG
+
+	# Encrypt, remove "Salted__" prefix to avoid disclosure and encode to base58
+	BASE58_ENCODED="$(encodeBase58 $(openssl enc -aes-256-cbc < $MSG | tail -c +9 | xxd -p | tr -d '\n'))"
+
+	# We don't need MSG file anymore; shred it just in case
+	shred -u $MSG
+
+	# Calculate data length modulo 3
+	LENMOD3=$(expr $(echo -n "$BASE58_ENCODED" | wc -c) '%' 3)
+
+	# Header contains information about data length modulo 3
+	# To avoid suspicion, header is chosen randomly from corresponding set
+	case $LENMOD3 in
+		0)
+			LENCHARS="23456789ABCDEFGHJKL"
+			;;
+		1)
+			LENCHARS="MNPQRSTUVWXYZabcdef"
+			;;
+		2)
+			LENCHARS="ghijkmnopqrstuvwxyz"
+			;;
+	esac
+
+	HEADER=$(echo $LENCHARS | sed -re 's/(.)/\1\n/g' | shuf | head -1)
+
+	# Slice data to 3 char parts
+	PARTS="$(echo -n "$HEADER$BASE58_ENCODED" | sed -re 's/(...)/\1 /g')"
+
+	# Use vanitygen to hide data into Bitcoin addresses
+	for PART in $PARTS;
+	do
+		"$VANITYGEN" 1$PART;
+	done
+}
+
+decrypt() {
+	. "$BITCOIN_BASH_TOOLS"
+	# Prepare tmp file with prefix "Salted__"
+	SALTED=`mktemp /dev/shm/salted.XXXXXX`
+	echo -n Salted__ > $SALTED
+
+	echo "Enter line separated Bitcoin addresses containing hidden data (end with Ctrl+D)"
+	# Extract only neccessary parts
+	ENCODED_DATA=`sed -re 's/^1(...).*$/\1/' | tr -d '\n'`
+
+	# Extract header
+	HEADER=`echo -n $ENCODED_DATA | sed -re 's/^(.).*/\1/'`
+
+	# Extract body depending on header
+	case $HEADER in
+		2|3|4|5|6|7|8|9|A|B|C|D|E|F|G|H|J|K|L)
+			BODY=$(echo -n $ENCODED_DATA | sed -re 's/^.(.*)..$/\1/')
+			;;
+		M|N|P|Q|R|S|T|U|V|W|X|Y|Z|a|b|c|d|e|f)
+			BODY=$(echo -n $ENCODED_DATA | sed -re 's/^.(.*).$/\1/')
+			;;
+		g|h|i|j|k|m|n|o|p|q|r|s|t|u|v|w|x|y|z)
+			BODY=$(echo -n $ENCODED_DATA | sed -re 's/^.(.*)$/\1/')
+			;;
+	esac
+
+	# Decrypt body
+	decodeBase58 "$BODY" | xxd -r -p | cat $SALTED - | openssl enc -aes-256-cbc -d
+
+	# Remove tmp file
+	rm $SALTED
+}
+
+if [ "$1" = "-d" ];
+then
+	decrypt
+	exit $?
+fi
+
+if [ "$1" = "-h" ];
+then
+	echo "Encrypt and steganographicaly hide message into set of Bitcoin addresses"
+	echo "Requires bitcoin-bash-tools - see https://github.com/grondilu/bitcoin-bash-tools/blob/master/bitcoin.sh and vanitygen"
+	echo "Usage: $0 [-d]"
+	echo "       $0 -h"
+	echo "Use -d to decrypt message"
+	exit 0
+fi
+
+encrypt
+exit $?

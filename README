@@ -1,0 +1,26 @@
+This is very simple proof-of-concept script that encrypts your secret message
+and hides it into set of Bitcoin addresses.
+
+Dependencies: vanitygen, bitcoin-bash-tools
+
+How it works:
+
+1. Message is encrypted with aes256-cbc
+2. Ciphertext is converted to 58
+3. Semi-random header informing about ciphertext length mod 3 is prepended to
+   ciphertext
+4. Ciphertext is sliced into parts up to 3 characters long
+5. Each part is passed to vanitygen to generate useful addresses beginning with
+   parts of ciphertext
+
+No one should be able to tell if addresses are random or not.
+You can make some legitimately looking transactions to/from those
+addresses, so your message will be stored in blockchain forever.
+
+You must agree with your friend on how addresses are stored and ordered.
+
+Probably, I won't improve this script anymore but feel free to fork it (and send pull requests).
+
+If you appreciate my work, tips are welcome at 1Habo2Ct3Ti3WY4QLC79VMmEWjGwb6xVdd
+
+License: MIT
